@@ -1,6 +1,6 @@
 # Payment
 ## Description
-Update xlsx-file with current formatting: cell filling, highlighting and notes. 
+To update xlsx-file with current formatting: cell filling, highlighting and notes. 
 Output  - xlsx-file that have formating exactly like as in the file Все платежи на.xlsx. This file also consists of current payments' update items (data in columns) and new payments (newly created) exactly like as in the file Выгрузка.xlsx. 
 In update file there should be no payments for individuals (except of self-employed and indidual enterpreuners) including non-residents and for some contarctors from exception list.
 В результате должен быть xlsx-файл с форматированием, аналогичным файлу Все платежи на.xlsx, содержащий обновленные данные по текущим платежам, а также новые созданные платежи из файла Выгрузка.xlsx.
@@ -76,3 +76,88 @@ pmnts = pmnts[(round(pmnts['Сумма к оплате'], 2) != 0.0)&
               (round(pmnts['Сумма к оплате'], 2) != 5.0)&
               (~pmnts['Сделка'].str.contains('Тестов'))]
 ```
+### 3. Deleting paid requests of payment.
+1. Paid requests of payment will be in the file Все платежи на.xlsx, but it won't be  in the file Выгрузка.xlsx. To delete paid requests of payment both files (Все платежи на.xlsx and Выгрузка.xlsx) are merged. Merge it selecting payments that are presented in the file Все платежи на.xlsx, but are ubsented in the file Выгрузка.xlsx.
+```
+del_pmnts = curr_pmnts.merge(pmnts, how='outer', left_on='№',right_on='№')
+del_pmnts = del_pmnts[(del_pmnts['Статус_y'].isna() == True) &
+                      (del_pmnts['Статья бюджета_x'].isna() == False) & 
+                      (~del_pmnts['Контрагент_x'].isin(cntr_except))]
+```
+2. To read xlsx-file for saving current formatting it's used *load_workbook* that is imported from *openpyxl*.
+```
+wb = load_workbook(<path>)
+ws = wb[<name_of_sheet>]
+```
+3. To delete selected payments list *cell.row* of deleting rows is created. *iter_rows* is needed for step-by-step iteration into xlsx-file, *iterrows()* is used into DataFrame.
+```
+del_row = []
+if del_pmnts.shape[0] != 0:
+  for row in ws.iter_rows(min_row=2, max_col=1):
+    for cell in row:
+      for idx, r in del_pmnts.iterrows():
+        if cell.value == del_pmnts.loc[idx]['№']:
+          del_row.append(cell.row)
+```
+### 4. Updating the fields of Все платежи на.xlsx.
+To update the requests' of payment data merge 2 files (Все платежи на.xlsx and Выгрузка.xlsx) selecting columns from Выгрузка.xlsx (with *_y* suffix). All updating data are into the Выгрузка.xlsx, that's why columns from this file are selected only.
+```
+curr_pmnts = curr_pmnts.merge(pmnts, left_on='№',right_on='№')
+curr_pmnts = curr_pmnts[['№', 'Сделка_x', 'Статус_y','Сумма к оплате_y','Контрагент_y',
+           'Название бюджета_y','Номер счета_y', 'Дата создания_y',
+           'Автор заявки_y', 'Договор_y', 'Проект_y', 'Статья бюджета_y']]
+```
+### 5. Adding new requests of payment.
+1. If rows from file Выгрузка.xlsx (mask *new_pmnts['Сделка_x'].isna()== True* is used for it) will be selected only the dataframe of newly created payments is formed. 
+```
+new_pmnts = curr_pmnts.merge(pmnts, how='outer', left_on='№',right_on='№')
+new_pmnts = new_pmnts[new_pmnts['Сделка_x'].isna() == True]
+new_pmnts = new_pmnts [['№', 'Сделка', 'Статус','Сумма к оплате','Контрагент',
+           'Название бюджета','Номер счета', 'Дата создания',
+           'Автор заявки', 'Договор', 'Проект', 'Статья бюджета']]
+```
+2. To add new payments it's needed to find position. It's a number of row into the file Все платежи на.xlsx for adding new paymnets. This position is equal to value from a intersection of the first row and column **№** in the dataframe *curr_pmnts*.
+```
+for row in ws.iter_rows(min_row=2, max_col=1, max_row=curr_pmnts.shape[0]):
+   for cell in row:
+     if cell.value == curr_pmnts.iloc[0,0]:
+       position = cell.row
+       break
+```
+3. To update the data into the xlsx-file every cell is filled by the value from a intersection  of the row and the column from dataframe *curr_pmnts*. To insert right value into the xlsx-file index of the starting row is offseted on *position*. The cells in column **Дата создания** must have date format that's why there is condition *if col == 7:*.
+```
+for col in range(curr_pmnts.shape[1]):
+  for row in range(curr_pmnts.shape[0]):
+    if col == 7:
+      value = curr_pmnts.iloc[row, col]
+      cell = ws.cell(position+row, col+1)
+      cell.value = value
+      cell.number_format = 'DD.MM.YYYY'
+    else:
+      ws.cell(position+row, col+1).value = curr_pmnts.iloc[row, col]  
+```
+5. The inserting of new requests of paymnet is doing by function *def ins_row (a_pmnts, numb)*, where *a_pmnts* - the updating dataframe,  *numb* - the number of row for adding new payments. The function is similar to the code in the previous step. But there are some differncies: 
+i. *insert_rows* is used to add new empty rows into the xlsx-file
+```
+ws.insert_rows(numb, a_pmnts.shape[0])
+```
+ii. *numb* is the same as the *position*
+```
+ws.cell(numb+row, col+1).value = a_pmnts.iloc[row, col]
+```
+iii. the certain format of the cells of column **Сумма к оплате** (numeric form with separators and 2 decimal places)
+```
+if col == 3:
+          ws.cell(numb+row, col+1).number_format = '# ### 000.00'
+```
+### 6. Adding hyperlinks into column **№**
+All requests of paymnets have the hyperlinks with the body https://portal.university.innopolis.ru/processes/list/111/element/0/{}/, where {} - the value from column **№**. The hyperlinks are filled in the xlsx-file with *iter_rows*.
+```
+url = "https://portal.university.innopolis.ru/processes/list/111/element/0/{}/"
+for row in ws.iter_rows(min_row=2, max_col=1):
+  for cell in row:
+    value = cell.value
+    cell.value = '=HYPERLINK("%s", "%s")' % (url.format(value), value)
+```
+### 7. Saving the xlsx-file
+*wb.save* is used to save the changes into the xlsx-file.
